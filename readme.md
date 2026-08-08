@@ -13,6 +13,7 @@ A PyQt6 desktop application for benchmarking any LLM served through an **OpenAI-
 - **Average TPS calculation**: Automatically computes average tokens-per-second across all runs
 
 ## Screenshots
+<img width="702" height="864" alt="image" src="https://github.com/user-attachments/assets/e0346393-f0e4-478e-be2f-056997d5c275" />
 
 The application provides a clean GUI with:
 - Connection settings (Base URL and API Key)
