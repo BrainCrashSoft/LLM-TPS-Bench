@@ -7,7 +7,31 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QTextEdit, QPushButton, QSpinBox, QDoubleSpinBox,
     QComboBox, QMessageBox, QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
+
+
+class ServerChecker(QThread):
+    """Checks server availability and loads models in a background thread."""
+
+    models_loaded_signal = pyqtSignal(list)
+    error_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal()
+
+    def __init__(self, base_url, api_key):
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+
+    def run(self):
+        try:
+            client = openai.OpenAI(base_url=self.base_url, api_key=self.api_key)
+            models_response = client.models.list()
+            model_ids = [m.id for m in models_response.data]
+            self.models_loaded_signal.emit(model_ids)
+        except Exception as e:
+            self.error_signal.emit(str(e))
+        finally:
+            self.finished_signal.emit()
 
 
 class BenchmarkWorker(QThread):
@@ -191,37 +215,49 @@ class BenchmarkApp(QMainWindow):
         results_group.setLayout(results_layout)
         main_layout.addWidget(results_group)
 
-        # Load models on start
-        self.load_models()
+        # Initialize model combo with placeholder
+        self.model_combo.clear()
+        self.model_combo.addItem("(Fix Base Url and click 🔄 Refresh Models)")
 
     def load_models(self):
-        """Fetch available models from the OpenAI-compatible API server."""
-        try:
-            client = openai.OpenAI(
-                base_url=self.base_url_input.text().strip(),
-                api_key=self.api_key_input.text().strip()
-            )
-            models_response = client.models.list()
-            model_ids = [m.id for m in models_response.data]
+        """Manually trigger model loading from the OpenAI-compatible API server (runs in background thread)."""
+        base_url = self.base_url_input.text().strip()
+        api_key = self.api_key_input.text().strip()
 
-            current = self.model_combo.currentText()
-            self.model_combo.clear()
+        # Disable refresh button while loading
+        self.refresh_models_btn.setEnabled(False)
+        self.log("🔄 Loading models...")
 
-            if not model_ids:
-                self.model_combo.addItem("(no models loaded)")
-                self.log("⚠️ No models found on the server. Make sure a model is loaded in your API server.")
-            else:
-                for mid in model_ids:
-                    self.model_combo.addItem(mid)
-                # Try to restore previously selected model
-                if current and current in model_ids:
-                    self.model_combo.setCurrentText(current)
-                self.log(f"✅ Loaded {len(model_ids)} model(s): {', '.join(model_ids)}")
+        self.server_checker = ServerChecker(base_url, api_key)
+        self.server_checker.models_loaded_signal.connect(self._on_models_loaded)
+        self.server_checker.error_signal.connect(self._on_server_check_error)
+        self.server_checker.finished_signal.connect(self._on_server_check_finished)
+        self.server_checker.start()
 
-        except Exception as e:
-            self.model_combo.clear()
-            self.model_combo.addItem("(error loading models)")
-            self.log(f"❌ Failed to load models: {e}")
+    def _on_models_loaded(self, model_ids):
+        """Handle successful server response - called from UI thread."""
+        self.model_combo.clear()
+
+        if not model_ids:
+            self.model_combo.addItem("(no models loaded)")
+            self.log("⚠️ No models found on the server. Make sure a model is loaded in your API server.")
+        else:
+            for mid in model_ids:
+                self.model_combo.addItem(mid)
+            self.log(f"✅ Loaded {len(model_ids)} model(s): {', '.join(model_ids)}")
+
+        self.refresh_models_btn.setEnabled(True)
+
+    def _on_server_check_error(self, error_msg):
+        """Handle server check failure - called from UI thread."""
+        self.model_combo.clear()
+        self.model_combo.addItem("(error loading models)")
+        self.log(f"❌ Failed to load models: {error_msg}")
+        self.refresh_models_btn.setEnabled(True)
+
+    def _on_server_check_finished(self):
+        """Called when the server check thread finishes."""
+        self.server_checker = None
 
     def run_benchmark(self):
         """Start benchmarking."""
